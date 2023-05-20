@@ -1,13 +1,17 @@
 use bevy::{
     ecs::event::ManualEventReader,
-    input::{mouse::MouseMotion},
+    input::mouse::MouseMotion,
     prelude::{
-        shape, App, Assets, Camera3dBundle, Color, Commands, Component, EulerRot,
-        Events, Input, KeyCode, Mesh, MouseButton, PbrBundle, PointLight, PointLightBundle, Quat,
-        Query, Res, ResMut, Resource, StandardMaterial, Transform, Vec3, With,
+        shape, App, Assets, Camera3dBundle, Color, Commands, Component, EulerRot, Events, Input,
+        KeyCode, Mesh, MouseButton, PbrBundle, PointLight, PointLightBundle, Quat, Query, Res,
+        ResMut, Resource, StandardMaterial, Transform, Vec3, With,
     },
     window::{CursorGrabMode, PrimaryWindow, Window},
     DefaultPlugins,
+};
+use bevy_rapier3d::prelude::{
+    Collider, ColliderMassProperties, Damping, ExternalForce, GravityScale, NoUserData,
+    RapierPhysicsPlugin, RigidBody, Velocity,
 };
 
 #[derive(Resource, Default)]
@@ -22,6 +26,7 @@ fn main() {
     App::new()
         .init_resource::<InputState>()
         .add_plugins(DefaultPlugins)
+        .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
         .add_startup_system(setup)
         .add_system(player_movement)
         .add_system(cursor_lock)
@@ -34,11 +39,13 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // plane
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(shape::Plane::from_size(5.0).into()),
-        material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
-        ..Default::default()
-    });
+    commands
+        .spawn(PbrBundle {
+            mesh: meshes.add(shape::Plane::from_size(5.0).into()),
+            material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
+            ..Default::default()
+        })
+        .insert(Collider::cuboid(5.0, 0.1, 5.0));
     // cube
     commands.spawn(PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
@@ -57,13 +64,22 @@ fn setup(
         ..Default::default()
     });
     // camera
-    commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-            ..Default::default()
-        },
-        Player,
-    ));
+    commands
+        .spawn((
+            Camera3dBundle {
+                transform: Transform::from_xyz(0.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+                ..Default::default()
+            },
+            Player,
+        ))
+        .insert((
+            RigidBody::Dynamic,
+            Collider::cuboid(0.5, 0.5, 0.5),
+            ColliderMassProperties::Mass(2.0),
+            ExternalForce::default(),
+            Velocity::default(),
+            Player,
+        ));
 }
 
 fn player_movement(
@@ -72,7 +88,10 @@ fn player_movement(
     mut player: Query<&mut Transform, With<Player>>,
     keyboard: Res<Input<KeyCode>>,
     windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut force: Query<&mut ExternalForce, With<Player>>,
+    mut velocity: Query<&mut Velocity, With<Player>>,
 ) {
+    let mut player_force = force.single_mut();
     if windows.single().cursor.grab_mode == CursorGrabMode::Locked {
         let mut transform = player.single_mut();
         for ev in state.reader_motion.iter(&motion) {
@@ -90,34 +109,28 @@ fn player_movement(
 
         if keyboard.pressed(KeyCode::W) {
             let forward = transform.forward();
-            transform.translation.x += forward.x;
-            transform.translation.z += forward.z;
+            // transform.translation.x += forward.x;
+            // transform.translation.z += forward.z;
+            player_force.force.x += forward.x;
+            player_force.force.z += forward.z;
         }
 
         if keyboard.pressed(KeyCode::A) {
             let left = transform.left();
-            transform.translation.x += left.x;
-            transform.translation.z += left.z;
+            // transform.translation.x += left.x;
+            // transform.translation.z += left.z;
         }
 
         if keyboard.pressed(KeyCode::S) {
             let back = transform.back();
-            transform.translation.x += back.x;
-            transform.translation.z += back.z;
+            // transform.translation.x += back.x;
+            // transform.translation.z += back.z;
         }
 
         if keyboard.pressed(KeyCode::D) {
             let right = transform.right();
-            transform.translation.x += right.x;
-            transform.translation.z += right.z;
-        }
-
-        if keyboard.pressed(KeyCode::Space) {
-            transform.translation.y += 1.0;
-        }
-
-        if keyboard.pressed(KeyCode::LShift) {
-            transform.translation.y -= 1.0;
+            // transform.translation.x += right.x;
+            // transform.translation.z += right.z;
         }
     }
 }
