@@ -2,21 +2,23 @@ use bevy::{
     ecs::event::ManualEventReader,
     input::mouse::MouseMotion,
     prelude::{
-        shape, App, Assets, Camera3dBundle, Color, Commands, Component, EulerRot, Events, Input,
-        KeyCode, Mesh, MouseButton, PbrBundle, PointLight, PointLightBundle, Quat, Query, Res,
+        shape, App, Assets, Camera3dBundle, Color, Commands, Component, Events, Input,
+        KeyCode, Mesh, PbrBundle, PointLight, PointLightBundle, Quat, Query, Res,
         ResMut, Resource, StandardMaterial, Transform, Vec3, With,
     },
     window::{CursorGrabMode, PrimaryWindow, Window},
-    DefaultPlugins,
+    DefaultPlugins, time::Time,
 };
 use bevy_rapier3d::prelude::{
-    Collider, ColliderMassProperties, Damping, ExternalForce, GravityScale, NoUserData,
-    RapierPhysicsPlugin, RigidBody, Velocity,
+    Collider, ColliderMassProperties, ExternalForce, NoUserData,
+    RapierPhysicsPlugin, RigidBody, Friction, CoefficientCombineRule,
 };
 
 #[derive(Resource, Default)]
 struct InputState {
     reader_motion: ManualEventReader<MouseMotion>,
+    pitch: f32,
+    yaw: f32,
 }
 
 #[derive(Component)]
@@ -28,8 +30,9 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
         .add_startup_system(setup)
-        .add_system(player_movement)
-        .add_system(cursor_lock)
+        .add_startup_system(initial_cursor_grab)
+        .add_system(player_move)
+        .add_system(player_look)
         .run();
 }
 
@@ -41,11 +44,12 @@ fn setup(
     // plane
     commands
         .spawn(PbrBundle {
-            mesh: meshes.add(shape::Plane::from_size(5.0).into()),
+            mesh: meshes.add(shape::Plane::from_size(500.0).into()),
             material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
             ..Default::default()
         })
-        .insert(Collider::cuboid(5.0, 0.1, 5.0));
+        .insert(Collider::cuboid(500.0, 0.1, 500.0));
+
     // cube
     commands.spawn(PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
@@ -53,6 +57,7 @@ fn setup(
         transform: Transform::from_xyz(0.0, 0.5, 0.0),
         ..Default::default()
     });
+
     // light
     commands.spawn(PointLightBundle {
         point_light: PointLight {
@@ -63,6 +68,7 @@ fn setup(
         transform: Transform::from_xyz(4.0, 8.0, 4.0),
         ..Default::default()
     });
+
     // camera
     commands
         .spawn((
@@ -76,79 +82,77 @@ fn setup(
             RigidBody::Dynamic,
             Collider::cuboid(0.5, 0.5, 0.5),
             ColliderMassProperties::Mass(2.0),
-            ExternalForce::default(),
-            Velocity::default(),
-            Player,
+            Friction {
+                coefficient: 2.0,
+                combine_rule: CoefficientCombineRule::Average
+            },
         ));
 }
 
-fn player_movement(
-    mut state: ResMut<InputState>,
-    motion: Res<Events<MouseMotion>>,
-    mut player: Query<&mut Transform, With<Player>>,
-    keyboard: Res<Input<KeyCode>>,
-    windows: Query<&mut Window, With<PrimaryWindow>>,
-    mut force: Query<&mut ExternalForce, With<Player>>,
-    mut velocity: Query<&mut Velocity, With<Player>>,
+fn player_move(
+    keys: Res<Input<KeyCode>>,
+    time: Res<Time>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut query: Query<&mut Transform, With<Player>>,
 ) {
-    let mut player_force = force.single_mut();
-    if windows.single().cursor.grab_mode == CursorGrabMode::Locked {
-        let mut transform = player.single_mut();
-        for ev in state.reader_motion.iter(&motion) {
-            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-            // Using smallest of height or width ensures equal vertical and horizontal sensitivity
-            pitch -= (0.1 * ev.delta.y).to_radians();
-            yaw -= (0.1 * ev.delta.x).to_radians();
+    let window = windows.single();
+        for mut transform in query.iter_mut() {
+            let mut velocity = Vec3::ZERO;
+            let local_z = transform.local_z();
+            let forward = -Vec3::new(local_z.x, 0., local_z.z);
+            let right = Vec3::new(local_z.z, 0., -local_z.x);
 
-            pitch = pitch.clamp(-1.54, 1.54);
+            for key in keys.get_pressed() {
+                if window.cursor.grab_mode == CursorGrabMode::Locked {
+                    match key {
+                        KeyCode::W => velocity += forward,
+                        KeyCode::S => velocity -= forward,
+                        KeyCode::A => velocity -= right,
+                        KeyCode::D => velocity += right,
+                        KeyCode::Space => velocity += Vec3::Y,
+                        KeyCode::LShift => velocity -= Vec3::Y,
+                        _ => (),
+                    }
+                }
+            }
 
-            // Order is important to prevent unintended roll
-            transform.rotation =
-                Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
+            velocity = velocity.normalize_or_zero();
+
+            transform.translation += velocity * time.delta_seconds() * 1.0 /*sensitivity*/
         }
-
-        if keyboard.pressed(KeyCode::W) {
-            let forward = transform.forward();
-            // transform.translation.x += forward.x;
-            // transform.translation.z += forward.z;
-            player_force.force.x += forward.x;
-            player_force.force.z += forward.z;
-        }
-
-        if keyboard.pressed(KeyCode::A) {
-            let left = transform.left();
-            // transform.translation.x += left.x;
-            // transform.translation.z += left.z;
-        }
-
-        if keyboard.pressed(KeyCode::S) {
-            let back = transform.back();
-            // transform.translation.x += back.x;
-            // transform.translation.z += back.z;
-        }
-
-        if keyboard.pressed(KeyCode::D) {
-            let right = transform.right();
-            // transform.translation.x += right.x;
-            // transform.translation.z += right.z;
-        }
-    }
 }
 
-fn cursor_lock(
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    btn: Res<Input<MouseButton>>,
-    key: Res<Input<KeyCode>>,
+/// Handles looking around if cursor is locked
+fn player_look(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut state: ResMut<InputState>,
+    motion: Res<Events<MouseMotion>>,
+    mut query: ResMut<Camera3dBundle>
 ) {
+    let window = windows.single();
+        let mut delta_state = state.as_mut();
+        for mut transform in query.iter_mut() {
+            for ev in delta_state.reader_motion.iter(&motion) {
+                if window.cursor.grab_mode == CursorGrabMode::Locked {
+                    // Using smallest of height or width ensures equal vertical and horizontal sensitivity
+                    let window_scale = window.height().min(window.width());
+                    delta_state.pitch -=
+                        (/*sensitivity*/ 0.00012 * ev.delta.y * window_scale).to_radians();
+                    delta_state.yaw -=
+                        (/*sensitivity*/ 0.00012 * ev.delta.x * window_scale).to_radians();
+                }
+
+                delta_state.pitch = delta_state.pitch.clamp(-1.54, 1.54);
+
+                // Order is important to prevent unintended roll
+                transform.rotation = Quat::from_axis_angle(Vec3::Y, delta_state.yaw)
+                    * Quat::from_axis_angle(Vec3::X, delta_state.pitch);
+            }
+        }
+}
+
+fn initial_cursor_grab(mut windows: Query<&mut Window, With<PrimaryWindow>>) {
     let mut window = windows.single_mut();
-
-    if btn.just_pressed(MouseButton::Left) {
-        window.cursor.grab_mode = CursorGrabMode::Locked;
-        window.cursor.visible = false;
-    }
-
-    if key.just_pressed(KeyCode::Escape) {
-        window.cursor.grab_mode = CursorGrabMode::None;
-        window.cursor.visible = true;
-    }
+    window.cursor.grab_mode = CursorGrabMode::Locked;
+    window.cursor.visible = false;
 }
